@@ -1,5 +1,9 @@
 arc/
-data/
 scrap/
 .vscode
 .txt
+# Ignore everything in this directory
+data/*
+# But not the directory itself
+!data/.gitkeep
+
