@@ -20,3 +20,5 @@ The only other file you need to install is `xlsx2csv` using `pip`:
 ```
 pip install xlsx2csv
 ```
+
+Additionally, I used `ripgrep` instead of `grep` for faster extraction of subset data from EggNOG. In case you rely on `grep` make edits accordingly in the notebooks (replace commands of `rg`)
