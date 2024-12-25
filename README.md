@@ -2,6 +2,8 @@
 
 Code to reproduce the results of the paper, "Horizontal gene transfer rates decrease during transitions to new ecosystems".
 
+This repository is only for analyses of ecosystem transfers and associated HGT rates. For the corresponding analysis about pathogencity gains instead, see [this repo instead](https://gitlab.cs.uni-duesseldorf.de/mishra/hgt_rates_and_pathogenicity_gains)
+
 Jupyter notebooks in `notebooks` directory were run in the order of their numbering. Scripts and other helper functions that they depend on or are mentioned in the notebooks can be found in the `code` directory.
 
 Please note that using 'Run all' or equivalent in the Jupyter notebooks will generally not be useful. Some of the intervening steps in the notebooks are markdown cells instructing how to run programs via shell, separately. These programs are time consuming ones, often utilising multiprocessing in an HPC. Please run the notebooks, cell by cell, keeping this in mind. Generally speaking, if you have run the previuos cell, you can run the current cell if it's a Python cell. If it's a markdown cell instructing you to do something, do it before proceeding.
