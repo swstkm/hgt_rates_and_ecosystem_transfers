@@ -2,6 +2,7 @@ arc/
 scrap/
 .vscode
 .txt
+__pycache__/
 # Ignore everything in this directory
 data/*
 # But not the directory itself
