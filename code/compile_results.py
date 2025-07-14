@@ -1,5 +1,6 @@
 # This file contains functions that are used by the notebooks in the notebooks folder.
 
+import dis
 import ete3
 import numpy as np
 import pandas as pd
@@ -189,7 +190,7 @@ def compile_ale_outputs(
     )
 
     # create a branch-pair-wise transfers file by taking mean of the transfers for each branch pair
-    branchwise_hgt_df = (
+    branchpairwise_hgt_df = (
         varwise_branchwise_hgt_df.groupby(["source_branch", "recipient_branch"])[
             "transfers"
         ]
@@ -198,9 +199,9 @@ def compile_ale_outputs(
     )
     # show it
     print("Branchwise transfers for each pair of branches:")
-    print(branchwise_hgt_df)
+    print(branchpairwise_hgt_df)
     # write it out
-    branchwise_hgt_df.to_csv(
+    branchpairwise_hgt_df.to_csv(
         f"{compiled_results_dir}/compiled_transfers.branchpairwise.{var_str}.tsv",
         index=False,
         header=True,
@@ -209,7 +210,7 @@ def compile_ale_outputs(
 
     # create a branchwise transfers file by taking the sum of every recipient branch across all source branches
     rec_branchwise_hgt_df = (
-        branchwise_hgt_df.groupby("recipient_branch")["transfers"].sum().reset_index()
+        branchpairwise_hgt_df.groupby("recipient_branch")["transfers"].sum().reset_index()
     )
     # rename this recipient branch column to 'branch'
     rec_branchwise_hgt_df.rename(columns={"recipient_branch": "branch"}, inplace=True)
@@ -244,6 +245,127 @@ def compile_ale_outputs(
         sep="\t",
     )
 
+    ##########################################################################################################
+
+    # now we compile the losses inferred by ALE. This needs to be read in from the .uml_rec files
+    all_uml_rec_files = [f for f in os.listdir(output_dir) if f.endswith(".uml_rec")]
+
+    varwise_losses_dfs_dict = {}
+    for uml_rec_file in all_uml_rec_files:
+        nog_id = uml_rec_file.split("_")[2].split(".")[0]
+        with open(os.path.join(output_dir, uml_rec_file), "r") as uml_rec_fo:
+            # read in the table after the line that contains "Originations"
+            uml_rec_lines = uml_rec_fo.readlines()
+            header_line = [i for i, l in enumerate(uml_rec_lines) if "Originations" in l][0]
+            uml_rec_lines = uml_rec_lines[header_line + 1 :]
+            # loop over lines and extract the branch name (with ale_node_mapping), and the number of losses
+            uml_rec_records = []
+            for l in uml_rec_lines:
+                if l.strip() == "":
+                    break
+                l_split = l.split()
+                branch_type, branch, losses = l_split[0], l_split[1], l_split[4]
+                if branch_type == "S_terminal_branch":
+                    new_branch = branch.split("(")[0]
+                else:
+                    new_branch = f"N{branch}"
+                uml_rec_records.append((new_branch, float(losses)))
+            # create a df from this list of records, with columns 'branch'(str), 'losses'(float)
+            uml_rec_df = pd.DataFrame.from_records(
+                uml_rec_records, columns=["branch", "losses"]
+            )
+            # make sure the branch column is string type and losses is float type
+            uml_rec_df["branch"] = uml_rec_df["branch"].astype(str)
+            uml_rec_df["losses"] = uml_rec_df["losses"].astype(float)
+            # add nog_id column
+            uml_rec_df["nog_id"] = nog_id
+            # add this df to the dict
+            varwise_losses_dfs_dict[nog_id] = uml_rec_df
+
+    # then we can create a varwise.branchwise file by concatenating the dfs.
+    # create a varwise branchwise losses df by concatenating the dfs
+    varwise_branchwise_losses_df = pd.concat(
+        varwise_losses_dfs_dict.values(), ignore_index=True
+    )
+    # show it
+    print("varwise, branchwise losses:")
+    print(varwise_branchwise_losses_df)
+    # write it out
+    varwise_branchwise_losses_df.to_csv(
+        f"{compiled_results_dir}/compiled_losses.varwise.branchwise.{var_str}.tsv",
+        index=False,
+        header=True,
+        sep="\t",
+    )
+
+    # group by branch and sum the losses to get branchwise losses
+    branchwise_losses_df = (
+        varwise_branchwise_losses_df.groupby("branch")["losses"].sum().reset_index()
+    )
+    # show it
+    print("branchwise losses:")
+    print(branchwise_losses_df)
+    # write it out
+    branchwise_losses_df.to_csv(
+        f"{compiled_results_dir}/compiled_losses.branchwise.{var_str}.tsv",
+        index=False,
+        header=True,
+        sep="\t",
+    )
+
+    # combine the branchwise transfers and losses to get branchwise dynamics
+    branchwise_dynamics_df = pd.merge(
+        rec_branchwise_hgt_df, branchwise_losses_df, on="branch", how="outer"
+    )
+    # fill NaNs with 0
+    branchwise_dynamics_df = branchwise_dynamics_df.fillna(0)
+    # show it
+    print("branchwise dynamics:")
+    print(branchwise_dynamics_df)
+    # write it out
+    branchwise_dynamics_df.to_csv(
+        f"{compiled_results_dir}/compiled_dynamics.branchwise.{var_str}.tsv",
+        index=False,
+        header=True,
+        sep="\t",
+    )
+
+    # similarly for varwise.branchwise dynamics, group by var_id and branch, and sum the transfers and losses
+    varwise_branchwise_dynamics_df = (
+        pd.merge(
+            rec_varwise_branchwise_hgt_df,
+            varwise_branchwise_losses_df,
+            on=["nog_id", "branch"],
+            how="outer",
+        )
+        .groupby(["nog_id", "branch"])[["transfers", "losses"]]
+        .sum()
+        .reset_index()
+    )
+    # fill NaNs on transfers and losses with 0
+    varwise_branchwise_dynamics_df[["transfers", "losses"]] = varwise_branchwise_dynamics_df[
+        ["transfers", "losses"]
+    ].fillna(0)
+    # show it
+    print("varwise, branchwise dynamics:")
+    print(varwise_branchwise_dynamics_df)
+    # show any rows with nan values
+    nan_rows = varwise_branchwise_dynamics_df[
+        varwise_branchwise_dynamics_df.isnull().any(axis=1)
+    ]
+    if not nan_rows.empty:
+        print("Rows with NaN values:")
+        print(nan_rows)
+    else:
+        print("No NaN values found in varwise, branchwise dynamics")
+    # write it out
+    varwise_branchwise_dynamics_df.to_csv(
+        f"{compiled_results_dir}/compiled_dynamics.varwise.branchwise.{var_str}.tsv",
+        index=False,
+        header=True,
+        sep="\t",
+    )
+
 
 def compile_gloome_results(
     expectations_df: pd.DataFrame,
@@ -254,7 +376,10 @@ def compile_gloome_results(
     var_name_str: str,
     pa_matrix_tsv_filepath: str,
     compiled_results_dir: str,
+    prob_cutoff: float
 ):
+
+    print(f"Compiling GLOOME results for {ml_mp}.{var_str} for {var_name_str} values")
 
     if ml_mp not in ["ml", "mp"]:
         raise ValueError(
@@ -276,9 +401,9 @@ def compile_gloome_results(
     # create a dict of row number to var IDs in pa_matrix_df
     print(
         f"Var IDs in the PA matrix file for {ml_mp}.{
-          var_str} looks like: {pa_matrix_df.columns}"
+          var_str} looks like: {pa_matrix_df.index}"
     )
-    pos_var_dict = {i + 1: var for i, var in enumerate(pa_matrix_df.columns)}
+    pos_var_dict = {i + 1: var for i, var in enumerate(pa_matrix_df.index)}
     print(
         f"POS to var ID mapping for {ml_mp}.{
           var_str} looks like: {pos_var_dict}"
@@ -289,6 +414,10 @@ def compile_gloome_results(
     gainloss_df = gainloss_df.rename(
         columns={"POS": var_name_str, "expectation": "transfers"}
     )
+
+    # if ml_mp is 'ml', filter the gains_df by the prob_cutoff on probability column
+    if ml_mp == "ml" and prob_cutoff is not None:
+        gainloss_df = gainloss_df[gainloss_df["probability"] >= prob_cutoff]
 
     # retain only the columns 'recipient_branch', 'transfers', var_name_str, 'gloome_branch_name' and 'G/L' in that order
     column_names = [
@@ -335,6 +464,10 @@ def compile_gloome_results(
     losses_df = losses_df.rename(
         columns={"recipient_branch": "branch", "transfers": "losses"}
     )
+    # show it
+    print(f"varwise, branchwise losses for {ml_mp}.{var_str} looks like:")
+    print(losses_df)
+    # write it out
     losses_df.to_csv(
         f"{compiled_results_dir}/compiled_losses.varwise.branchwise.{var_str}.{ml_mp}.gloome.tsv",
         index=False,
@@ -382,25 +515,24 @@ def compile_gloome_results(
     varwise_branchwise_changes_df = pd.merge(
         gains_df,
         losses_df,
-        on=f"{var_name_str}_B-branch",
+        on=[f"{var_name_str}_B-branch", var_name_str],
         how="outer",
         suffixes=("_gain", "_loss"),
     )
-    # fill NaNs with 0
-    varwise_branchwise_changes_df = varwise_branchwise_changes_df.fillna(0)
+    # fill NaNs with 0 but only for columns transfers and losses
+    varwise_branchwise_changes_df = varwise_branchwise_changes_df.fillna(
+        {col: 0 for col in varwise_branchwise_changes_df.columns if ("transfers" in col) or ("losses" in col)}
+    )
+    # define branch column using the _B-branch column
+    varwise_branchwise_changes_df["branch"] = varwise_branchwise_changes_df[
+        f"{var_name_str}_B-branch"
+    ].apply(lambda x: x.split("_B-")[1])
+
     #  drop the column 'var_name_str_B-branch'
     varwise_branchwise_changes_df = varwise_branchwise_changes_df.drop(
-        columns=[f"{var_name_str}_B-branch", "branch_loss", f"{var_name_str}_loss"]
+        columns=[f"{var_name_str}_B-branch", "branch_loss", "branch_gain"]
     )
-    # rename columns
-    varwise_branchwise_changes_df = varwise_branchwise_changes_df.rename(
-        columns={
-            "transfers_gain": "transfers",
-            "losses_loss": "losses",
-            "branch_gain": "branch",
-            f"{var_name_str}_gain": var_name_str,
-        }
-    )
+    # show it
     print(f"varwise, branchwise changes for {ml_mp}.{var_str} looks like:")
     print(varwise_branchwise_changes_df)
     # write to file
@@ -435,6 +567,7 @@ def read_and_compile_gloome_results(
     var_name_str,
     pa_matrix_tsv_filepath,
     compiled_results_dir: str,
+    prob_cutoff: float = 0.5,
 ):
     """
     Given the output directory of a GLOOME run, this function reads in the output files and compiles the results into a set of TSV files.
@@ -485,21 +618,26 @@ def read_and_compile_gloome_results(
         var_name_str,
         pa_matrix_tsv_filepath,
         compiled_results_dir,
+        prob_cutoff
     )
 
     # case MP: branchwise expectations
-    mp_expectations_file_path = os.path.join(
-        gloome_output_dir, "gainLossMP.1.PerBranch.txt"
-    )
+    mp_expectations_file_path = [
+        os.path.join(gloome_output_dir, f)
+        for f in os.listdir(gloome_output_dir)
+        if f.startswith("gainLossMP.") and f.endswith(".PerBranch.txt")
+    ][0]
     # this file has 6 rows to skip instead of just one
     mp_expectations_df = pd.read_csv(
         mp_expectations_file_path, skiprows=list(range(6)), sep="\t"
     )
 
     # case MP: varwise and varwise.branchwise expectations
-    mp_gainloss_file_path = os.path.join(
-        gloome_output_dir, "gainLossMP.1.PerPosPerBranch.txt"
-    )
+    mp_gainloss_file_path = [
+        os.path.join(gloome_output_dir, f)
+        for f in os.listdir(gloome_output_dir)
+        if f.startswith("gainLossMP.") and f.endswith(".PerPosPerBranch.txt")
+    ][0]
     # skip first 5 rows and read in the file
     mp_gainloss_df = pd.read_csv(
         mp_gainloss_file_path, skiprows=list(range(5)), sep="\t"
@@ -515,6 +653,7 @@ def read_and_compile_gloome_results(
         var_name_str,
         pa_matrix_tsv_filepath,
         compiled_results_dir,
+        None,
     )
 
 
